@@ -20,7 +20,7 @@
 package lucandra;
 
 import java.io.IOException;
-import java.util.Collections;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -28,18 +28,18 @@ import java.util.Set;
 import java.util.SortedMap;
 import java.util.TreeMap;
 
-import org.apache.cassandra.service.Cassandra;
-import org.apache.cassandra.service.ColumnOrSuperColumn;
-import org.apache.cassandra.service.ColumnParent;
-import org.apache.cassandra.service.ConsistencyLevel;
-import org.apache.cassandra.service.InvalidRequestException;
-import org.apache.cassandra.service.SlicePredicate;
-import org.apache.cassandra.service.SliceRange;
+import org.apache.cassandra.db.ColumnFamily;
+import org.apache.cassandra.db.IColumn;
+import org.apache.cassandra.db.RangeCommand;
+import org.apache.cassandra.db.ReadCommand;
+import org.apache.cassandra.db.Row;
+import org.apache.cassandra.db.SliceFromReadCommand;
+import org.apache.cassandra.db.filter.QueryPath;
+import org.apache.cassandra.service.StorageProxy;
 import org.apache.cassandra.service.UnavailableException;
 import org.apache.log4j.Logger;
 import org.apache.lucene.index.Term;
 import org.apache.lucene.index.TermEnum;
-import org.apache.thrift.TException;
 
 /**
  * 
@@ -53,35 +53,32 @@ public class LucandraTermEnum extends TermEnum {
 
     private int termPosition;
     private Term[] termBuffer;
-    private SortedMap<Term, List<ColumnOrSuperColumn>> termDocFreqBuffer;
-    private Map<Term, SortedMap<Term, List<ColumnOrSuperColumn>>> termCache;
+    private SortedMap<Term, List<IColumn>> termDocFreqBuffer;
+    private Map<Term, SortedMap<Term, List<IColumn>>> termCache;
 
-    //number of sequential terms to read initially
+    // number of sequential terms to read initially
     private final int maxInitSize = 2;
     private int actualInitSize = -1;
     private Term initTerm;
-     
-    private final Cassandra.Client client;
-    private final Term finalTerm = new Term(""+new Character((char)255), ""+new Character((char)255));
-    
-    
+
+    private final Term finalTerm = new Term("" + new Character((char) 255), "" + new Character((char) 255));
+
     private static final Logger logger = Logger.getLogger(LucandraTermEnum.class);
 
     public LucandraTermEnum(IndexReader indexReader) {
         this.indexReader = indexReader;
         this.indexName = indexReader.getIndexName();
-        this.client = indexReader.getClient();
         this.termPosition = 0;
 
-        this.termCache = new HashMap<Term, SortedMap<Term, List<ColumnOrSuperColumn>>>();
+        this.termCache = new HashMap<Term, SortedMap<Term, List<IColumn>>>();
     }
 
     @Override
     public boolean skipTo(Term term) throws IOException {
-        
-        if(term == null)
+
+        if (term == null)
             return false;
-        
+
         loadTerms(term);
 
         return termBuffer.length == 0 ? false : true;
@@ -104,22 +101,22 @@ public class LucandraTermEnum extends TermEnum {
 
         boolean hasNext = termPosition < termBuffer.length;
 
-        if(hasNext && termBuffer[termPosition].equals(finalTerm)){
+        if (hasNext && termBuffer[termPosition].equals(finalTerm)) {
             termPosition++;
             hasNext = termPosition < termBuffer.length;
         }
-        
-        if (!hasNext) {           
-        
-            //if we've already done init try grabbing more
-            if(actualInitSize == maxInitSize){
+
+        if (!hasNext) {
+
+            // if we've already done init try grabbing more
+            if (actualInitSize == maxInitSize) {
                 loadTerms(initTerm);
                 hasNext = termBuffer.length > 0;
             }
-            
+
             termPosition = 0;
         }
-            
+
         return hasNext;
     }
 
@@ -162,12 +159,11 @@ public class LucandraTermEnum extends TermEnum {
 
         // First buffer the keys in this term range
         List<String> keys;
-        try {
-            keys = client.get_key_range(CassandraUtils.keySpace, CassandraUtils.termVecColumnFamily, startTerm, endTerm, count,
-                    ConsistencyLevel.ONE);
-        } catch (InvalidRequestException e) {
-            throw new RuntimeException(e);
-        } catch (TException e) {
+        RangeCommand rangeCommand = new RangeCommand(CassandraUtils.keySpace, CassandraUtils.termVecColumnFamily, startTerm, endTerm, count);
+        
+        try{
+            keys = StorageProxy.getKeyRange(rangeCommand);
+        }catch(IOException e){
             throw new RuntimeException(e);
         } catch (UnavailableException e) {
             throw new RuntimeException(e);
@@ -184,38 +180,39 @@ public class LucandraTermEnum extends TermEnum {
             initTerm = null;
         }
             
-        termDocFreqBuffer = new TreeMap<Term, List<ColumnOrSuperColumn>>();
+        termDocFreqBuffer = new TreeMap<Term, List<IColumn>>();
 
         if (!keys.isEmpty()) {
-            ColumnParent columnParent = new ColumnParent(CassandraUtils.termVecColumnFamily, null);
-            SlicePredicate slicePredicate = new SlicePredicate();
-
-            // Get all columns
-            SliceRange sliceRange = new SliceRange(new byte[] {}, new byte[] {}, false, Integer.MAX_VALUE);
-            slicePredicate.setSlice_range(sliceRange);
-
-            Map<String, List<ColumnOrSuperColumn>> columns;
-
-            try {
-                columns = client.multiget_slice(CassandraUtils.keySpace, keys, columnParent, slicePredicate, ConsistencyLevel.ONE);
-            } catch (InvalidRequestException e) {
-                throw new RuntimeException(e);
-            } catch (TException e) {
-                throw new RuntimeException(e);
-            } catch (UnavailableException e) {
-                throw new RuntimeException(e);
+          
+            List<ReadCommand> commands = new ArrayList<ReadCommand>(keys.size());
+            
+            for(String key : keys){
+                commands.add(  new SliceFromReadCommand(CassandraUtils.keySpace, 
+                    key, new QueryPath(CassandraUtils.termVecColumnFamily), 
+                    new byte[] {}, new byte[] {}, true, Integer.MAX_VALUE));        
             }
-
-            for (Map.Entry<String, List<ColumnOrSuperColumn>> entry : columns.entrySet()) {
-
-                // term keys look like wikipedia/body/wiki
-                String termStr = entry.getKey().substring(entry.getKey().indexOf("/")+1);
-                Term term = CassandraUtils.parseTerm(termStr.getBytes());
+            
+            try {
+            
+                List<Row> rows = StorageProxy.readProtocol(commands, 1);
                 
-                termDocFreqBuffer.put(term, entry.getValue());
+                for(Row row : rows){
+                    
+                    String termStr = row.key().substring(row.key().indexOf("/")+1);
+                    Term term = CassandraUtils.parseTerm(termStr.getBytes());
+                    
+                    ColumnFamily cf = row.getColumnFamily(CassandraUtils.termVecColumnFamily);
+                    
+                   cf.getSortedColumns();
+                   
+                   termDocFreqBuffer.put(term, new ArrayList<IColumn>(cf.getSortedColumns()));
+                }
+            }catch(Exception e){
+                
+                throw new RuntimeException(e);
             }
         }
-
+        
         
         //add a final key (excluded in submap below)
         termDocFreqBuffer.put(finalTerm, null);
@@ -224,7 +221,7 @@ public class LucandraTermEnum extends TermEnum {
         for (Term termKey : termDocFreqBuffer.keySet()) {
                     
             
-            SortedMap<Term, List<ColumnOrSuperColumn>> subMap = termDocFreqBuffer.subMap(termKey, termDocFreqBuffer.lastKey());
+            SortedMap<Term, List<IColumn>> subMap = termDocFreqBuffer.subMap(termKey, termDocFreqBuffer.lastKey());
             
             logger.debug("Caching "+termKey+" with "+subMap.size()+" siblings");
             termCache.put(termKey, subMap);
@@ -244,28 +241,26 @@ public class LucandraTermEnum extends TermEnum {
 
     }
 
-    public final List<ColumnOrSuperColumn> getTermDocFreq() {
+    public final List<IColumn> getTermDocFreq() {
         if (termBuffer.length == 0)
             return null;
 
-        List<ColumnOrSuperColumn> termDocs = termDocFreqBuffer.get(termBuffer[termPosition]);
-        
-        //show results in descending order by default
-        Collections.reverse(termDocs); 
-        
-        //create proper docIds.
-        //We do this now because of how lucene fetches the results
-        //in buffered chunks. This way all the doc ids are consistent
-        for(ColumnOrSuperColumn col: termDocs){
-            indexReader.addDocument(col.getColumn().getName());
+        List<IColumn> termDocs = termDocFreqBuffer.get(termBuffer[termPosition]);
+
+        // show results in descending order by default
+        //Collections.reverse(termDocs);
+
+        // create proper docIds.
+        // We do this now because of how lucene fetches the results
+        // in buffered chunks. This way all the doc ids are consistent
+        for (IColumn col : termDocs) {
+            indexReader.addDocument(col.name());
         }
-        
-        
 
         return termDocs;
     }
-    
-    public Set<Term> getCachedTerms(){
+
+    public Set<Term> getCachedTerms() {
         return termCache.keySet();
     }
 

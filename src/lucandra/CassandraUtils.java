@@ -19,24 +19,14 @@
  */
 package lucandra;
 
+import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.util.List;
 import java.util.UUID;
 
-import org.apache.cassandra.service.Cassandra;
-import org.apache.cassandra.service.ColumnPath;
-import org.apache.cassandra.service.ConsistencyLevel;
-import org.apache.cassandra.service.InvalidRequestException;
-import org.apache.cassandra.service.UnavailableException;
+import org.apache.cassandra.service.StorageService;
 import org.apache.log4j.Logger;
 import org.apache.lucene.index.Term;
-import org.apache.thrift.TException;
-import org.apache.thrift.protocol.TBinaryProtocol;
-import org.apache.thrift.protocol.TProtocol;
-import org.apache.thrift.transport.TFramedTransport;
-import org.apache.thrift.transport.TSocket;
-import org.apache.thrift.transport.TTransport;
-import org.apache.thrift.transport.TTransportException;
 
 public class CassandraUtils {
 
@@ -49,30 +39,13 @@ public class CassandraUtils {
 
     private static final Logger logger = Logger.getLogger(CassandraUtils.class);
 
-    public static Cassandra.Client createConnection() throws TTransportException {
-        
-        
-        if(System.getProperty("cassandra.host") == null || System.getProperty("cassandra.port") == null) {
-           logger.warn("cassandra.host or cassandra.port is not defined, using default");
+    //Start on startup
+    static{
+        try{
+           StorageService.instance().start();
+        }catch(IOException e){
+            throw new RuntimeException("Unable to start cassandra",e);
         }
-        
-        //connect to cassandra
-        TSocket socket = new TSocket(
-                System.getProperty("cassandra.host","localhost"), 
-                Integer.valueOf(System.getProperty("cassandra.port","9160")));
-        
-        
-        TTransport trans;
-        
-        if(Boolean.valueOf(System.getProperty("cassandra.framed", "false")))
-            trans = new TFramedTransport(socket);
-        else
-            trans = socket;
-        
-        trans.open();
-        TProtocol protocol = new TBinaryProtocol(trans);
-
-        return new Cassandra.Client(protocol);
     }
 
     public static String createColumnName(Term term) {
@@ -180,30 +153,4 @@ public class CassandraUtils {
 
     }
 
-    public static void robustInsert(Cassandra.Client client, String key, ColumnPath columnPath, byte[] value) {
-
-        // Should use a circut breaker here
-        boolean try_again = false;
-        int attempts = 0;
-        long startTime = System.currentTimeMillis();
-        do {
-            try {
-                attempts = 0;
-                try_again = false;
-                client.insert(CassandraUtils.keySpace, key, columnPath, value, System.currentTimeMillis(), ConsistencyLevel.ONE);
-                logger.debug("Inserted in " + (startTime - System.currentTimeMillis()) / 1000 + "ms");
-            } catch (TException e) {
-                throw new RuntimeException(e);
-            } catch (InvalidRequestException e) {
-                throw new RuntimeException(e);
-            } catch (UnavailableException e) {
-                try_again = true;
-            }
-        } while (try_again && attempts < 10);
-        
-        //fail
-        if(try_again){
-            throw new RuntimeException("Insert still failed after 10 attempts");
-        }
-    }
 }

@@ -24,11 +24,9 @@ import java.io.File;
 import java.io.FileReader;
 import java.io.IOException;
 
-import lucandra.CassandraUtils;
 import lucandra.IndexReader;
 import lucandra.IndexWriter;
 
-import org.apache.cassandra.service.Cassandra;
 import org.apache.lucene.analysis.Analyzer;
 import org.apache.lucene.analysis.standard.StandardAnalyzer;
 import org.apache.lucene.document.Document;
@@ -40,26 +38,15 @@ import org.apache.lucene.search.IndexSearcher;
 import org.apache.lucene.search.Query;
 import org.apache.lucene.search.ScoreDoc;
 import org.apache.lucene.search.TopDocs;
-import org.apache.thrift.transport.TTransportException;
 
 /**
  * Simple demo showing Lucandra in action
  */
 public class BookmarksDemo {
 
-    // Connect to casssssssssandra
-    private static Cassandra.Client client;
-    static {
-        try {
-            client = CassandraUtils.createConnection();
-        } catch (TTransportException e) {
-            System.err.println("Error connecting to Cassandra: "+e.getMessage());
-            System.exit(2);
-        }
-    }
-
-    private static IndexWriter indexWriter = new IndexWriter("bookmarks", client);
-    private static IndexReader indexReader = new IndexReader("bookmarks", client);
+    
+    private static IndexWriter indexWriter = new IndexWriter("bookmarks");
+    private static IndexReader indexReader = new IndexReader("bookmarks");
     private static IndexSearcher indexSearcher = new IndexSearcher(indexReader);
     private static Analyzer analyzer = new StandardAnalyzer();
 

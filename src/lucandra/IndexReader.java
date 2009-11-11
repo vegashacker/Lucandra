@@ -21,6 +21,7 @@ package lucandra;
 
 import java.io.IOException;
 import java.io.UnsupportedEncodingException;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.HashMap;
@@ -28,12 +29,14 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 
-import org.apache.cassandra.service.Cassandra;
-import org.apache.cassandra.service.ColumnOrSuperColumn;
+import org.apache.cassandra.db.ColumnFamily;
+import org.apache.cassandra.db.IColumn;
+import org.apache.cassandra.db.ReadCommand;
+import org.apache.cassandra.db.Row;
+import org.apache.cassandra.db.SliceFromReadCommand;
+import org.apache.cassandra.db.filter.QueryPath;
 import org.apache.cassandra.service.ColumnParent;
-import org.apache.cassandra.service.ConsistencyLevel;
-import org.apache.cassandra.service.SlicePredicate;
-import org.apache.cassandra.service.SliceRange;
+import org.apache.cassandra.service.StorageProxy;
 import org.apache.log4j.Logger;
 import org.apache.lucene.document.Document;
 import org.apache.lucene.document.Field;
@@ -57,7 +60,6 @@ public class IndexReader extends org.apache.lucene.index.IndexReader {
     }
     
     private final String indexName;
-    private final Cassandra.Client client;
     private final Map<String,Integer> docIdToDocIndex;
     private final Map<Integer,String> docIndexToDocId;
     private final AtomicInteger docCounter;
@@ -67,10 +69,9 @@ public class IndexReader extends org.apache.lucene.index.IndexReader {
 
     private static final Logger logger = Logger.getLogger(IndexReader.class);
 
-    public IndexReader(String name, Cassandra.Client client) {
+    public IndexReader(String name) {
         super();
         this.indexName = name;
-        this.client = client;
 
         docCounter         = new AtomicInteger(0);
         docIdToDocIndex    = new HashMap<String,Integer>();
@@ -129,7 +130,7 @@ public class IndexReader extends org.apache.lucene.index.IndexReader {
 
             long end = System.currentTimeMillis();
 
-            logger.info("docFreq() took: " + (end - start) + "ms");
+            logger.debug("docFreq() took: " + (end - start) + "ms");
 
             termEnumCache.put(term, termEnum);   
         }
@@ -137,31 +138,35 @@ public class IndexReader extends org.apache.lucene.index.IndexReader {
         return termEnum.docFreq();
     }
 
+    
     @Override
     public Document document(int docNum, FieldSelector selector) throws CorruptIndexException, IOException {
 
         String key = indexName +"/"+docIndexToDocId.get(docNum);
         
-        ColumnParent columnParent = new ColumnParent();
-        columnParent.setColumn_family(CassandraUtils.docColumnFamily);
         
-
-        //get all columns
-        SlicePredicate slicePredicate = new SlicePredicate();
-        slicePredicate.setSlice_range(new SliceRange(new byte[] {}, new byte[] {}, false, 100));
-
+        List<ReadCommand> commands = new ArrayList<ReadCommand>();
+        commands.add(new SliceFromReadCommand(
+                CassandraUtils.keySpace, key, 
+                new QueryPath(CassandraUtils.docColumnFamily), 
+                new byte[] {}, new byte[] {}, false, 100));
+        
+       
         long start = System.currentTimeMillis();
 
         try {
-            List<ColumnOrSuperColumn> cols = client.get_slice(CassandraUtils.keySpace, key, columnParent, slicePredicate, ConsistencyLevel.ONE);
-
             Document doc = new Document();
-            for (ColumnOrSuperColumn col : cols) {
-                Field field = new Field(new String(col.column.name, "UTF-8"), col.column.value, Store.YES);
-
-                doc.add(field);
+            
+            List<Row> rows = StorageProxy.readProtocol(commands, 1);
+            for(Row row : rows){
+                ColumnFamily cf = row.getColumnFamily(CassandraUtils.docColumnFamily);
+                for(Map.Entry<byte[], IColumn> col : cf.getColumnsMap().entrySet() ){
+                    Field f = new Field(new String(col.getKey()), col.getValue().value(), Store.YES);
+                    doc.add(f);
+                }
             }
-
+            
+           
             long end = System.currentTimeMillis();
 
             logger.debug("Document read took: " + (end - start) + "ms");
@@ -304,10 +309,6 @@ public class IndexReader extends org.apache.lucene.index.IndexReader {
 
     public String getIndexName() {
         return indexName;
-    }
-
-    public Cassandra.Client getClient() {
-        return client;
     }
     
     public LucandraTermEnum checkTermCache(Term term){

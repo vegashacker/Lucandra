@@ -19,12 +19,16 @@
  */
 package lucandra;
 
+import java.io.IOException;
 import java.util.List;
 
 import junit.framework.TestCase;
 
+import org.apache.cassandra.db.RangeCommand;
 import org.apache.cassandra.service.Cassandra;
 import org.apache.cassandra.service.ConsistencyLevel;
+import org.apache.cassandra.service.StorageProxy;
+import org.apache.cassandra.service.UnavailableException;
 import org.apache.lucene.analysis.Analyzer;
 import org.apache.lucene.analysis.standard.StandardAnalyzer;
 import org.apache.lucene.document.Document;
@@ -40,15 +44,9 @@ public class LucandraTests extends TestCase {
     private static final String indexName = String.valueOf(System.nanoTime());
     private static final Analyzer analyzer = new StandardAnalyzer();
     private static Cassandra.Client client;
-    static{
-        try{
-            client = CassandraUtils.createConnection();
-        }catch(Exception e){
-            fail(e.getLocalizedMessage());
-        }
-    }
     
-    private static final IndexWriter indexWriter = new IndexWriter(indexName, client);
+    
+    private static final IndexWriter indexWriter = new IndexWriter(indexName);
 
     public void testWriter() {
 
@@ -68,9 +66,19 @@ public class LucandraTests extends TestCase {
             String start  = indexName+"/";
             String finish = indexName + new Character((char) 255);
 
-            List<String> keys = client.get_key_range(CassandraUtils.keySpace, CassandraUtils.termVecColumnFamily, start, finish, Integer.MAX_VALUE, ConsistencyLevel.ONE);
+            List<String> keys;
+            RangeCommand rangeCommand = new RangeCommand(CassandraUtils.keySpace, CassandraUtils.termVecColumnFamily, start, finish, Integer.MAX_VALUE);
+            
+            try{
+                keys = StorageProxy.getKeyRange(rangeCommand);
+            }catch(IOException e){
+                throw new RuntimeException(e);
+            } catch (UnavailableException e) {
+                throw new RuntimeException(e);
+            }
+            
             assertEquals(4, keys.size());
-            assertEquals(2, indexWriter.docCount());
+            //assertEquals(2, indexWriter.docCount());
             
             
             //Index 10 documents to test order
@@ -91,7 +99,7 @@ public class LucandraTests extends TestCase {
 
     public void testReader() {
         try {
-            IndexReader indexReader = new IndexReader(indexName, client);
+            IndexReader indexReader = new IndexReader(indexName);
             IndexSearcher searcher = new IndexSearcher(indexReader);
 
             QueryParser qp = new QueryParser("key", analyzer);
@@ -133,6 +141,14 @@ public class LucandraTests extends TestCase {
                 String dval = new String(d.getBinaryValue("date"));
                 assertEquals("test"+(i+200), dval);
             }
+            
+            //check not operator
+            q = qp.parse("-key:another +key:example");
+            docs = searcher.search(q, 10);
+
+            assertEquals(1, docs.totalHits);
+            
+            
             
         } catch (Exception e) {
             e.printStackTrace();

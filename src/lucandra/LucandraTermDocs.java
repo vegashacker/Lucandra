@@ -22,7 +22,8 @@ package lucandra;
 import java.io.IOException;
 import java.util.List;
 
-import org.apache.cassandra.service.ColumnOrSuperColumn;
+import org.apache.cassandra.db.ColumnFamily;
+import org.apache.cassandra.db.IColumn;
 import org.apache.log4j.Logger;
 import org.apache.lucene.index.Term;
 import org.apache.lucene.index.TermDocs;
@@ -33,7 +34,7 @@ public class LucandraTermDocs implements TermDocs, TermPositions {
 
     private IndexReader indexReader;
     private LucandraTermEnum termEnum;
-    private List<ColumnOrSuperColumn> termDocs;
+    private List<IColumn> termDocs;
     private int docPosition;
     private int[] termPositionArray;
     private int termPosition;
@@ -53,14 +54,14 @@ public class LucandraTermDocs implements TermDocs, TermPositions {
         if (docPosition < 0)
             docPosition = 0;
 
-        int docid = indexReader.addDocument(termDocs.get(docPosition).column.getName());
+        int docid = indexReader.addDocument(termDocs.get(docPosition).name());
 
         return docid;
     }
 
     public int freq() {
 
-        termPositionArray = CassandraUtils.byteArrayToIntArray(termDocs.get(docPosition).column.getValue());
+        termPositionArray = CassandraUtils.byteArrayToIntArray(termDocs.get(docPosition).value());
         termPosition = 0;
 
         return termPositionArray.length;
