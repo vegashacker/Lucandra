@@ -202,10 +202,8 @@ public class LucandraTermEnum extends TermEnum {
                     Term term = CassandraUtils.parseTerm(termStr.getBytes());
                     
                     ColumnFamily cf = row.getColumnFamily(CassandraUtils.termVecColumnFamily);
-                    
-                   cf.getSortedColumns();
-                   
-                   termDocFreqBuffer.put(term, new ArrayList<IColumn>(cf.getSortedColumns()));
+                                       
+                    termDocFreqBuffer.put(term, new ArrayList<IColumn>(cf.getSortedColumns()));
                 }
             }catch(Exception e){
                 
