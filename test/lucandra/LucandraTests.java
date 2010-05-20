@@ -30,6 +30,7 @@ import org.apache.cassandra.thrift.KeySlice;
 import org.apache.cassandra.thrift.SlicePredicate;
 import org.apache.cassandra.thrift.SliceRange;
 import org.apache.lucene.analysis.Analyzer;
+import org.apache.lucene.analysis.SimpleAnalyzer;
 import org.apache.lucene.analysis.TokenStream;
 import org.apache.lucene.analysis.cjk.CJKAnalyzer;
 import org.apache.lucene.document.Document;
@@ -54,6 +55,7 @@ public class LucandraTests extends TestCase {
 
     private static final String indexName = String.valueOf(System.nanoTime());
     private static final Analyzer analyzer = new CJKAnalyzer(Version.LUCENE_CURRENT);
+    private static final Analyzer simpleAnalyzer = new SimpleAnalyzer();
     private static final String text = "this is an example value foobar foobar";
     private static final String highlightedText = "this is an example value <B>foobar</B> <B>foobar</B>";
 
@@ -335,6 +337,31 @@ public class LucandraTests extends TestCase {
         assertNotNull(rv);
         assertEquals(rv, highlightedText);
     }
+
+    public void testSimpleAnalyzerWriteRead() throws Exception {
+        
+        Document doc = new Document();
+        Field f = new Field("title", text, Field.Store.YES, Field.Index.ANALYZED);
+        doc.add(f);
+        indexWriter.addDocument(doc, simpleAnalyzer);
+        
+        IndexReader indexReader = new IndexReader(indexName, client);
+        IndexSearcher searcher = new IndexSearcher(indexReader);
+        QueryParser qp = new QueryParser(Version.LUCENE_CURRENT, "title", simpleAnalyzer);
+        
+        Query q = qp.parse("foobar");
+        TopDocs docs = searcher.search(q, 10);
+        assertEquals(1, docs.totalHits);
+        
+        q = qp.parse("\"not in index\"");
+        docs = searcher.search(q, 10);
+        assertEquals(0, docs.totalHits);
+        
+        q = qp.parse("\"foobar foobar\"");
+        docs = searcher.search(q, 10);
+        assertEquals(1, docs.totalHits);
+    }
+    
     
     public void testLucandraFilter() throws Exception {
         IndexReader indexReader = new IndexReader(indexName, client);
